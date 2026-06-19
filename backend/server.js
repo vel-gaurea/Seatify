@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
 const connectDB = require('./config/db');
 
 // Route imports
@@ -11,14 +12,27 @@ const bookingRoutes = require('./routes/bookingRoutes');
 
 const app = express();
 
-// Connect to MongoDB
-connectDB();
-
 // Core middleware
 app.use(cors());
 app.use(express.json());
 
-// Health check route — useful for quickly confirming the server is alive
+// Connect to MongoDB once per cold start, reuse the connection across
+// invocations instead of reconnecting on every request.
+let isConnected = false;
+app.use(async (req, res, next) => {
+  if (isConnected || mongoose.connection.readyState === 1) {
+    return next();
+  }
+  try {
+    await connectDB();
+    isConnected = true;
+    next();
+  } catch (err) {
+    res.status(500).json({ message: 'Database connection failed' });
+  }
+});
+
+// Health check routes
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Api working' });
 });
@@ -32,12 +46,12 @@ app.use('/api/events', eventRoutes);
 app.use('/api/reserve', reservationRoutes);
 app.use('/api/bookings', bookingRoutes);
 
-// 404 handler — for any route that doesn't match
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-// Global error handler — catches errors passed via next(err) from controllers
+// Global error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(err.statusCode || 500).json({
@@ -45,7 +59,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// Only listen on a port locally — Vercel imports `app` directly and
+// never calls .listen()
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
